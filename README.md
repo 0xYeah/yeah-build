@@ -18,7 +18,11 @@
 ## 🚀 快速开始
 
 ### 安装
+```shell
 
+```
+
+### 编译
 ```bash
 # 克隆或下载代码
 git clone <your-repo>
@@ -35,6 +39,10 @@ sudo cp yeah-build /usr/local/bin/
 ```
 
 ### 初次使用
+#### 安装
+```shell
+wget --no-check-certificate https://raw.githubusercontent.com/0xYeah/yeah-build/main/install_yeeah-build.sh && chmod a+x ./install_yeeah-build.sh && ./install_yeeah-build.sh
+```
 
 ```bash
 # 在项目根目录执行(会自动生成配置文件)
