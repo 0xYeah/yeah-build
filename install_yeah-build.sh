@@ -1,57 +1,69 @@
 #!/bin/bash
-set -e
+# 核心修复：所有日志输出到stderr，确保变量只保留纯数据
 
-DOWNLOAD_URL="https://raw.githubusercontent.com/0xYeah/yeah-build/main/yeeah-build"
+# ===================== 核心配置 =====================
+GITHUB_REPO="0xYeah/yeah-build"
+ASSET_BASE_NAME="yeah-build_release"
 
-# ===================== 基础兼容配置 =====================
-# 解决Windows路径分隔符问题（/ 和 \ 互转）
-convert_path() {
-    local path="$1"
-    if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$(uname -s)" == MINGW* ]]; then
-        # Windows环境：将/转为\，同时处理绝对路径（如/c/ → C:\）
-        path=$(echo "$path" | sed 's|^/c/|C:\\|g; s|/|\\|g')
-    fi
-    echo "$path"
-}
-
-# 颜色输出（兼容所有终端，Git Bash/CMD/PowerShell）
+# ===================== 基础配置（日志输出到stderr） =====================
+# 颜色输出（所有日志输出到stderr，避免污染stdout）
 color_red() {
     if [[ "$TERM" == "xterm" || "$OSTYPE" == "msys" ]]; then
-        echo -e "\033[0;31m$1\033[0m"
+        echo -e "\033[0;31m$1\033[0m" >&2
     else
-        echo "[$(date +%H:%M:%S) ERROR] $1"
+        echo "[$(date +%H:%M:%S) ERROR] $1" >&2
     fi
 }
 color_green() {
     if [[ "$TERM" == "xterm" || "$OSTYPE" == "msys" ]]; then
-        echo -e "\033[0;32m$1\033[0m"
+        echo -e "\033[0;32m$1\033[0m" >&2
     else
-        echo "[$(date +%H:%M:%S) INFO] $1"
+        echo "[$(date +%H:%M:%S) INFO] $1" >&2
     fi
 }
 color_yellow() {
     if [[ "$TERM" == "xterm" || "$OSTYPE" == "msys" ]]; then
-        echo -e "\033[1;33m$1\033[0m"
+        echo -e "\033[1;33m$1\033[0m" >&2
     else
-        echo "[$(date +%H:%M:%S) WARN] $1"
+        echo "[$(date +%H:%M:%S) WARN] $1" >&2
     fi
 }
 
-# 脚本结束自动删除
-cleanup() {
-    local script_path="$0"
-    # 适配Windows路径，避免删除失败
-    script_path=$(convert_path "$script_path")
-    if [ -f "$script_path" ]; then
-        rm -f "$script_path" >/dev/null 2>&1
-        color_green "脚本已自动删除"
-    fi
-}
-#trap cleanup EXIT
+# 路径转换（修复换行/转义问题）
+convert_path() {
+    local input_path="$1"
+    # 移除所有换行符和多余空格
+    input_path=$(echo "$input_path" | tr -d '\n' | tr -d '\r' | sed 's/[[:space:]]*$//')
 
-# ===================== 系统/终端识别 =====================
-get_sys_and_terminal() {
-    # 1. 识别终端类型
+    if [[ -z "$input_path" ]]; then
+        echo ""
+        return 0
+    fi
+
+    # POSIX → Windows
+    if [[ "$input_path" =~ ^/[a-zA-Z]/ ]]; then
+        local drive=$(echo "$input_path" | cut -c2 | tr 'a-z' 'A-Z')
+        local win_path="${drive}:${input_path#/[a-zA-Z]}"
+        win_path=${win_path//\//\\}
+        echo "$win_path"
+        return 0
+    fi
+
+    # Windows → POSIX
+    if [[ "$input_path" =~ ^[a-zA-Z]:\\ ]]; then
+        local drive=$(echo "$input_path" | cut -c1 | tr 'A-Z' 'a-z')
+        local posix_path="/${drive}/${input_path#*:\\}"
+        posix_path=${posix_path//\\/\/}
+        echo "$posix_path"
+        return 0
+    fi
+
+    echo "$input_path"
+}
+
+# ===================== 系统/架构识别 =====================
+get_sys_arch_terminal() {
+    color_green "【步骤1/6】识别运行环境..."
     if [[ -n "$PSModulePath" && -n "$PWSH_VERSION" ]]; then
         TERMINAL_TYPE="pwsh"
     elif [[ "$COMSPEC" == *"cmd.exe"* && -z "$BASH_VERSION" ]]; then
@@ -61,235 +73,276 @@ get_sys_and_terminal() {
     fi
     color_green "检测到终端环境：$TERMINAL_TYPE"
 
-    # 2. 识别系统类型
     if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" || "$(uname -s)" == MINGW* ]]; then
         OS_TYPE="windows"
-        # Windows系统可识别路径（适配PATH环境变量）
-        SYS_PATH="$HOME/AppData/Local/Microsoft/WindowsApps"
-        # 备用系统路径（更通用）
-        if [ -d "C:\\Windows\\System32" ]; then
-            SYS_PATH="C:\\Windows\\System32"
+        if [[ "$(uname -m)" == "x86_64" || "$PROCESSOR_ARCHITECTURE" == "AMD64" ]]; then
+            ARCH_TYPE="x86_64"
+            ARCH_ALIAS="amd64"
+        else
+            ARCH_TYPE="x86_64"
+            ARCH_ALIAS="amd64"
         fi
-    elif [ -f /etc/os-release ]; then
-        . /etc/os-release
-        OS_TYPE=$ID
-        case "$OS_TYPE" in
-            ubuntu|debian) SYS_PATH="/usr/bin" ;;
-            centos|rhel) SYS_PATH="/usr/local/bin" ;;
-            *) SYS_PATH="/usr/local/bin" ;;
-        esac
-    elif [ "$(uname -s)" = "Darwin" ]; then
-        OS_TYPE="macos"
-        SYS_PATH="/usr/local/bin"
-        [ -d "/opt/homebrew/bin" ] && SYS_PATH="/opt/homebrew/bin"
+        SYS_PATH="/c/Windows/System32"
+        USER_BIN_PATH="$HOME/AppData/Local/bin"
     else
         OS_TYPE="linux"
+        ARCH_TYPE="x86_64"
+        ARCH_ALIAS="amd64"
         SYS_PATH="/usr/local/bin"
+        USER_BIN_PATH="$SYS_PATH"
     fi
-    # 统一路径格式（终端友好显示）
-    SYS_PATH=$(convert_path "$SYS_PATH")
-    color_green "检测到系统：$OS_TYPE，默认系统路径：$SYS_PATH"
+
+    # 构建匹配关键词
+    if [[ "$OS_TYPE" == "windows" ]]; then
+        MATCH_KEYWORDS=("windows_${ARCH_ALIAS}" "windows_${ARCH_TYPE}")
+    else
+        MATCH_KEYWORDS=("linux_${ARCH_ALIAS}" "linux_${ARCH_TYPE}")
+    fi
+
+    color_green "检测到系统：$OS_TYPE | 架构：$ARCH_TYPE（别名：$ARCH_ALIAS） | 系统二进制路径：$SYS_PATH"
+    color_green "资产匹配关键词：${MATCH_KEYWORDS[*]}"
+    color_green "✅ 环境识别完成"
 }
 
 # ===================== 安装路径选择 =====================
 choose_install_path() {
-    local current_path=$(pwd)
-    current_path=$(convert_path "$current_path")
+    color_green "【步骤2/6】选择安装路径..."
+    CURRENT_DIR=$(pwd)
+    CURRENT_DIR=$(convert_path "$CURRENT_DIR")
 
-    color_yellow "\n【选择安装位置】"
-    echo "1) 当前目录（默认）：$current_path"
-    echo "2) 系统可识别路径：$SYS_PATH"
+    color_yellow "请选择安装路径：
+1. 当前脚本执行目录（推荐，默认）：$CURRENT_DIR
+2. 自定义路径
+3. 系统用户级二进制目录：$USER_BIN_PATH"
+    read -p "输入1/2/3（回车默认1）：" input
+    input=${input:-1}
 
-    # 适配不同终端的输入方式
-    if [[ "$TERMINAL_TYPE" == "pwsh" ]]; then
-        # PowerShell输入逻辑
-        $CHOICE = Read-Host "输入1/2（回车默认1）"
-        CHOICE=$(echo "$CHOICE" | tr -d '\r\n') # 去除换行符
-    elif [[ "$TERMINAL_TYPE" == "cmd" ]]; then
-        # CMD输入逻辑
-        set /p CHOICE="输入1/2（回车默认1）："
-        CHOICE=$(echo "$CHOICE" | tr -d '\r\n')
-    else
-        # Git Bash输入逻辑
-        read -p "输入1/2（回车默认1）：" CHOICE
-    fi
+    case "$input" in
+        "1") INSTALL_PATH="$CURRENT_DIR" ;;
+        "2")
+            read -p "请输入自定义安装路径：" custom_path
+            INSTALL_PATH=$(convert_path "$custom_path") ;;
+        "3") INSTALL_PATH="$USER_BIN_PATH" ;;
+        *)
+            color_red "输入无效，使用默认路径：$CURRENT_DIR"
+            INSTALL_PATH="$CURRENT_DIR" ;;
+    esac
 
-    # 确定安装路径
-    if [[ "$CHOICE" == "2" ]]; then
-        INSTALL_PATH="$SYS_PATH"
-        # Windows无需sudo，Linux/macOS检查权限
-        if [[ "$OS_TYPE" != "windows" && ! -w "$INSTALL_PATH" ]]; then
-            SUDO="sudo"
-            color_yellow "系统路径需要sudo权限"
-        else
-            SUDO=""
-        fi
-    else
-        INSTALL_PATH="$current_path"
-        SUDO=""
-    fi
+    mkdir -p "$INSTALL_PATH" || { color_red "创建路径失败：$INSTALL_PATH"; exit 1; }
+    # 最终清理路径
+    INSTALL_PATH=$(convert_path "$INSTALL_PATH")
     color_green "最终安装路径：$INSTALL_PATH"
+    color_green "✅ 路径选择完成"
 }
 
-# ===================== 跨平台下载逻辑（增强版） =====================
+# ===================== 前置检查 =====================
+pre_check() {
+    color_green "【步骤3/6】前置环境检查..."
+    color_green "1/3 跳过网络连通性检查"
+
+    color_green "2/3 检查下载工具..."
+    if [[ "$OS_TYPE" != "windows" ]]; then
+        if ! command -v wget >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
+            color_red "❌ 未安装wget/curl"
+            exit 1
+        fi
+        color_green "✅ 下载工具检查通过"
+    else
+        color_green "✅ Windows系统跳过下载工具检查"
+    fi
+
+    color_green "3/3 检查安装路径写入权限..."
+    local test_file="$INSTALL_PATH/.yeah_test_$(date +%s)"
+    if touch "$test_file" >/dev/null 2>&1; then
+        rm -f "$test_file" >/dev/null 2>&1
+        color_green "✅ 安装路径写入权限检查通过"
+    else
+        color_red "❌ 安装路径无写入权限：$INSTALL_PATH"
+        exit 1
+    fi
+
+    # 检查jq
+    color_green "【额外检查】验证jq工具..."
+    if [[ "$OS_TYPE" == "windows" ]]; then
+        JQ_PATHS=(
+            "$HOME/AppData/Local/Microsoft/WinGet/Packages/JQLang.jq_Microsoft.Winget.Source_8wekyb3d8bbwe/jq.exe"
+        )
+        for jq_path in "${JQ_PATHS[@]}"; do
+            if [ -f "$jq_path" ]; then
+                export PATH="$PATH:$(dirname "$jq_path")"
+                color_green "✅ 找到winget安装的jq：$jq_path"
+                break
+            fi
+        done
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        color_red "❌ 未检测到jq工具"
+        exit 1
+    else
+        color_green "✅ jq工具检查通过（版本：$(jq --version)）"
+    fi
+
+    color_green "✅ 前置环境检查全部完成"
+}
+
+# ===================== 获取资产链接（关键修复：只返回纯URL） =====================
+get_matched_asset_url() {
+    color_green "【步骤4/6】获取最新Release资产..."
+    local api_url="https://api.github.com/repos/${GITHUB_REPO}/releases/latest"
+
+    # 只获取纯API响应，日志输出到stderr
+    color_green "正在查询最新Release：$api_url"
+    local api_response=$(curl -s -L "$api_url")
+    if [[ -z "$api_response" ]]; then
+        color_red "❌ GitHub API返回空内容"
+        exit 1
+    fi
+
+    # 获取纯资产列表（无日志）
+    local all_assets=$(echo "$api_response" | jq -r '.assets[] | .name + "|" + .browser_download_url')
+    if [[ -z "$all_assets" ]]; then
+        color_red "❌ 未找到任何Release资产"
+        exit 1
+    fi
+
+    # 匹配资产
+    local matched_url=""
+    for keyword in "${MATCH_KEYWORDS[@]}"; do
+        color_green "尝试匹配资产关键词：$ASSET_BASE_NAME + $keyword"
+        matched_url=$(echo "$all_assets" | grep -i "${ASSET_BASE_NAME}.*${keyword}" | cut -d'|' -f2 | head -1)
+        if [[ -n "$matched_url" ]]; then
+            break
+        fi
+    done
+
+    if [[ -z "$matched_url" ]]; then
+        color_red "❌ 未找到匹配的资产！
+可用资产列表：
+$(echo "$all_assets" | cut -d'|' -f1)"
+        exit 1
+    fi
+
+    # 只输出纯URL到stdout，其他日志到stderr
+    local matched_filename=$(basename "$matched_url")
+    color_green "✅ 匹配到资产：$matched_filename"
+    color_green "✅ 下载链接：$matched_url"
+    color_green "✅ 资产匹配完成"
+
+    # 关键：只返回纯URL，无任何其他输出
+    echo "$matched_url"
+}
+
+# ===================== 下载文件（修复URI和路径） =====================
 download_file() {
     local url="$1"
     local output="$2"
-    color_green "开始下载：$url → $output"
+    color_green "【步骤5/6】下载文件..."
 
-    # 适配Windows路径，避免下载路径错误
+    # 强制清理URL和路径（移除所有非必要字符）
+    url=$(echo "$url" | tr -d '\n' | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
     output=$(convert_path "$output")
+    local output_win=$(convert_path "$output")
 
-    # 前置检查：URL是否有效
-    if ! curl -s --head "$url" | grep -q "200 OK" && ! wget --spider -q "$url"; then
-        color_red "URL无效或无法访问：$url，请检查网络和地址！"
-        exit 1
-    fi
+    color_green "下载地址：$url"
+    color_green "保存路径：$output_win"
 
-    # 方案1：优先用wget（Linux/macOS/Windows Git Bash 均可安装）
-    if command -v wget >/dev/null 2>&1; then
-        wget --no-check-certificate --timeout=30 -O "$output" "$url"
-        if [ $? -eq 0 ]; then
-            color_green "wget 下载成功"
-            return 0
-        fi
-        color_yellow "wget 下载失败，尝试 curl..."
-    fi
-
-    # 方案2：备用curl（比wget更通用，Linux/macOS默认有，Windows可安装）
-    if command -v curl >/dev/null 2>&1; then
-        curl -sSL --insecure --timeout=30 -o "$output" "$url"
-        if [ $? -eq 0 ]; then
-            color_green "curl 下载成功"
-            return 0
-        fi
-        color_yellow "curl 下载失败，尝试 PowerShell（仅Windows）..."
-    fi
-
-    # 方案3：Windows兜底（PowerShell）
+    # Windows PowerShell下载（修复URI）
     if [[ "$OS_TYPE" == "windows" ]]; then
-        powershell -Command "try {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12;
-            Invoke-WebRequest -Uri '$url' -OutFile '$output' -UseBasicParsing -TimeoutSec 30;
-        } catch {
-            # 兼容旧版PowerShell（无TimeoutSec）
-            Invoke-WebRequest -Uri '$url' -OutFile '$output' -UseBasicParsing;
-        }"
+        color_green "使用PowerShell下载..."
+        # 构建纯PowerShell命令，无转义错误
+        powershell -Command "
+            \$ErrorActionPreference = 'Stop'
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri '$url' -OutFile '$output_win' -UseBasicParsing
+            Write-Host '✅ PowerShell 下载成功'
+        " 2>&1
         if [ $? -eq 0 ]; then
-            color_green "PowerShell 下载成功"
+            color_green "✅ PowerShell 下载成功"
             return 0
         fi
+        color_yellow "⚠️ PowerShell 下载失败，尝试curl..."
     fi
 
-    # 所有方案失败
-    color_red "下载失败！请检查：
-    1. 网络是否能访问 $url；
-    2. Windows：是否安装PowerShell ≥5.1，且无权限拦截；
-    3. Linux/macOS：是否安装 wget/curl（sudo apt install wget curl）；
-    4. 若需代理，先执行：export https_proxy=http://代理IP:端口"
-    exit 1
-}
-
-# ===================== 脚本启动前：前置检查 =====================
-pre_check() {
-    color_green "========== 前置环境检查 =========="
-    # 检查网络连通性
-    if ! ping -c 1 raw.githubusercontent.com >/dev/null 2>&1; then
-        color_yellow "警告：无法ping通 raw.githubusercontent.com，可能网络受限！
-        若需代理，请先执行：export https_proxy=http://你的代理IP:端口"
-    fi
-
-    # 检查下载工具（至少有一个）
-    if ! command -v wget >/dev/null 2>&1 && ! command -v curl >/dev/null 2>&1; then
-        if [[ "$OS_TYPE" == "windows" ]]; then
-            color_yellow "未检测到wget/curl，将使用PowerShell下载..."
-        else
-            color_red "Linux/macOS 未安装wget/curl，请先执行：
-            Debian/Ubuntu: sudo apt install wget curl
-            CentOS/RHEL: sudo yum install wget curl
-            macOS: brew install wget curl"
-            exit 1
+    # curl下载
+    if command -v curl >/dev/null 2>&1; then
+        color_green "使用curl下载..."
+        if curl -sL --insecure -o "$output" "$url"; then
+            color_green "✅ curl 下载成功"
+            return 0
         fi
+        color_red "❌ curl 下载失败"
     fi
 
-    # 检查路径权限
-    local test_file="$INSTALL_PATH/.test_write"
-    touch "$test_file" >/dev/null 2>&1
-    if [ $? -ne 0 ]; then
-        color_red "安装路径无写入权限：$INSTALL_PATH，请切换路径或提升权限！"
-        exit 1
-    fi
-    rm -f "$test_file" >/dev/null 2>&1
-}
-
-# 主流程中添加前置检查
-main() {
-    color_green "========== 开始安装 yeeah-build =========="
-    get_sys_and_terminal
-    choose_install_path
-    pre_check  # 新增：前置检查
-    install_main
-    color_green "========== 安装流程结束 =========="
+    color_red "❌ 下载失败！请手动下载：
+下载地址：$url
+保存路径：$output_win"
+    exit 1
 }
 
 # ===================== 核心安装逻辑 =====================
 install_main() {
-    # 下载地址（替换为实际地址）
-    # 目标文件路径
-    TARGET_FILE="$INSTALL_PATH/yeeah-build"
-    # 适配Windows后缀（可选，让文件可直接执行）
-    if [[ "$OS_TYPE" == "windows" ]]; then
-        TARGET_FILE="${TARGET_FILE}.exe"
+    # 关键：只捕获纯URL，排除所有日志
+    DOWNLOAD_URL=$(get_matched_asset_url)
+    # 强制清理下载链接
+    DOWNLOAD_URL=$(echo "$DOWNLOAD_URL" | tr -d '\n' | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+
+    if [[ -z "$DOWNLOAD_URL" || ! "$DOWNLOAD_URL" =~ ^https:// ]]; then
+        color_red "❌ 无效的下载链接：$DOWNLOAD_URL"
+        exit 1
+    fi
+
+    # 生成目标文件路径
+    ORIGINAL_FILENAME=$(basename "$DOWNLOAD_URL")
+    TARGET_FILE="$INSTALL_PATH/$ORIGINAL_FILENAME"
+    TARGET_FILE=$(convert_path "$TARGET_FILE")
+
+    # 检查文件是否存在
+    if [ -f "$TARGET_FILE" ]; then
+        color_yellow "⚠️ 目标文件已存在：$TARGET_FILE
+1. 覆盖安装
+2. 退出"
+        read -p "输入1/2（回车默认1）：" cover_choice
+        cover_choice=${cover_choice:-1}
+        if [[ "$cover_choice" == "2" ]]; then
+            color_green "ℹ️ 用户选择退出"
+            exit 0
+        fi
     fi
 
     # 下载文件
     download_file "$DOWNLOAD_URL" "$TARGET_FILE"
 
-    # 添加可执行权限（Windows无需chmod）
-    if [[ "$OS_TYPE" != "windows" ]]; then
-        $SUDO chmod +x "$TARGET_FILE"
-    fi
-
-    # 验证安装
+    # 完成安装
+    color_green "【步骤6/6】完成安装..."
     if [ -f "$TARGET_FILE" ]; then
-        color_green "安装完成！"
-        if [[ "$CHOICE" == "2" ]]; then
-            color_green "可直接执行：yeeah-build（Linux/macOS）或 yeeah-build.exe（Windows）"
-        else
-            if [[ "$TERMINAL_TYPE" == "git-bash" ]]; then
-                color_green "可执行：./yeeah-build"
-            elif [[ "$TERMINAL_TYPE" == "cmd" ]]; then
-                color_green "可执行：yeeah-build.exe"
-            elif [[ "$TERMINAL_TYPE" == "pwsh" ]]; then
-                color_green "可执行：.\yeeah-build.exe"
-            fi
+        color_green "✅ yeah-build 安装完成！"
+        if [[ "$ORIGINAL_FILENAME" == *.zip ]]; then
+            unzip -o $TARGET_FILE -d $INSTALL_PATH
+            rm -rf $TARGET_FILE
         fi
     else
-        color_red "安装失败"
+        color_red "❌ 安装失败：文件不存在"
         exit 1
     fi
 }
 
 # ===================== 主流程 =====================
 main() {
-    color_green "========== 开始安装 yeeah-build =========="
-    get_sys_and_terminal
+    color_green "========== 开始安装 yeah-build 最新版本 =========="
+    get_sys_arch_terminal
     choose_install_path
+    pre_check
+    color_green "========== 前置流程完成，开始资产获取 =========="
     install_main
-    color_green "========== 安装流程结束 =========="
+    color_green "========== 安装流程全部结束 =========="
 }
 
-# 适配不同终端的启动方式
-if [[ "$TERMINAL_TYPE" == "pwsh" || "$TERMINAL_TYPE" == "cmd" ]]; then
-    # PowerShell/CMD：通过Git Bash解释器执行
-    if command -v bash.exe >/dev/null 2>&1; then
-        bash.exe "$0" "$@"
-        exit $?
-    else
-        color_red "未找到Git Bash（bash.exe），请先安装Git for Windows！"
-        exit 1
-    fi
+# ===================== 启动 =====================
+if [[ "$TERM" == "pwsh" || "$TERM" == "cmd" ]]; then
+    color_red "❌ 不支持PowerShell/CMD，请使用Git Bash"
+    exit 1
 else
-    # Git Bash：原生执行
+    color_green "✅ 终端验证通过，启动安装..."
     main
 fi
