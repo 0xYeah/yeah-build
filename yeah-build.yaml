@@ -1,0 +1,48 @@
+interactive: true
+
+global:
+  parallel: false
+  stop_on_error: true
+  log_file: "build.log"
+  timeout: 600
+
+projects:
+  - name: "backend-api"
+    path: "./backend"
+    type: "java"
+    git:
+      pull: true
+      branch: "main"
+      reset: false
+    build:
+      clean: true
+      test: false
+      commands:
+        - "mvn clean package -DskipTests"
+    env:
+      JAVA_HOME: "/usr/lib/jvm/java-17"
+
+  - name: "frontend-service"
+    path: "./frontend"
+    type: "go"
+    git:
+      pull: true
+      branch: "main"
+    build:
+      clean: true
+      commands:
+        - "go mod download"
+        - "go build -o bin/app ./cmd/main.go"
+    env:
+      CGO_ENABLED: "0"
+
+  - name: "admin-dashboard"
+    path: "./admin"
+    type: "node"
+    disabled: false
+    git:
+      pull: true
+    build:
+      commands:
+        - "npm install"
+        - "npm run build"
