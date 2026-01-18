@@ -188,8 +188,10 @@ BuildBinary() {
     fi
 
     # 创建输出目录
+    rm -rf ${output_dir}
     mkdir -p "${output_dir}"
-    echo "[INFO] 开始编译: ${target_os}/${target_arch} -> ${output_dir}/${output_name}"
+    echo "[INFO] clear: ${output_dir}/${output_name}"
+    echo "[INFO] start build: ${target_os}/${target_arch} -> ${output_dir}/${output_name}"
 
     # 修复：Windows下跨平台编译的环境变量传递方式
     if [ ${IS_WINDOWS} -eq 1 ]; then
@@ -237,6 +239,8 @@ PackageBinary() {
     fi
 
     # 创建打包目录
+    rm -rf ${package_path}
+    echo "clear old package ${package_path}"
     mkdir -p "${UPLOAD_TMP_DIR}"
 
     # 进入源目录打包
