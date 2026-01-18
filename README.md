@@ -40,6 +40,12 @@ sudo cp yeah-build /usr/local/bin/
 
 ### 初次使用
 #### 安装
+#### wget windows install
+```shell
+winget install --id=GNU.Wget2 -e
+ ln -s /c/Users/Administrator/AppData/Local/Microsoft/WinGet/Links/wget2 /c/Users/Administrator/AppData/Local/Microsoft/WinGet/Links/wget
+```
+
 ```shell
 wget --no-check-certificate https://raw.githubusercontent.com/0xYeah/yeah-build/main/install_yeeah-build.sh && chmod a+x ./install_yeeah-build.sh && ./install_yeeah-build.sh
 ```
