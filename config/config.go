@@ -2,5 +2,5 @@ package config
 
 const (
 	ProjectName    = "yeah-build"
-	ProjectVersion = "v0.0.3"
+	ProjectVersion = "v0.0.4"
 )
